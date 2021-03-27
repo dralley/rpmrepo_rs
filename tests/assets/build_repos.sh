@@ -11,7 +11,7 @@ createrepo_c \
   --pkglist=fixture_data/empty_repo_pkglist.txt \
   fixture_data/packages/
 
-# Complex repository - use all metadata features (except <contenthash>))
+# Complex repository - use all metadata features
 mkdir -p complex_repo/
 createrepo_c \
   --outputdir=complex_repo/ \

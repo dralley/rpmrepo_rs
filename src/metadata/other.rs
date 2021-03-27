@@ -11,112 +11,117 @@
 // </package>
 // </otherdata>
 
-use quick_xml::events::{BytesDecl, BytesStart, BytesText, Event};
-use quick_xml::{Reader, Writer};
 use std::io::{BufRead, Write};
 
-use super::common::EVR;
-use super::metadata::{RpmMetadata, XML_NS_OTHER};
-use super::MetadataError;
+use quick_xml::events::{BytesDecl, BytesStart, BytesText, Event};
+use quick_xml::{Reader, Writer};
+
+use super::metadata::{Changelog, OtherXml, Package, RpmMetadata, EVR, XML_NS_OTHER};
+use super::{MetadataError, RpmRepository};
 
 const TAG_OTHERDATA: &[u8] = b"otherdata";
 const TAG_PACKAGE: &[u8] = b"package";
 const TAG_VERSION: &[u8] = b"version";
 const TAG_CHANGELOG: &[u8] = b"changelog";
 
-#[derive(Debug, PartialEq, Default)]
-pub struct Otherdata {
-    pub packages: Vec<Package>,
+impl RpmMetadata for OtherXml {
+    const NAME: &'static str = "other.xml";
+
+    fn load_metadata<R: BufRead>(
+        repository: &mut RpmRepository,
+        reader: &mut Reader<R>,
+    ) -> Result<(), MetadataError> {
+        read_other_xml(repository, reader)
+    }
+
+    fn write_metadata<W: Write>(
+        repository: &RpmRepository,
+        writer: &mut Writer<W>,
+    ) -> Result<(), MetadataError> {
+        write_other_xml(repository, writer)
+    }
 }
 
-#[derive(Debug, PartialEq, Default)]
-pub struct Package {
-    pkgid: String,
-    name: String,
-    arch: String,
-    version: EVR,
-    changelogs: Vec<Changelog>,
-}
+fn read_other_xml<R: BufRead>(
+    repository: &mut RpmRepository,
+    reader: &mut Reader<R>,
+) -> Result<(), MetadataError> {
+    let mut buf = Vec::new();
 
-#[derive(Debug, PartialEq, Default)]
-pub struct Changelog {
-    author: String,
-    date: u64,
-    description: String,
-}
+    let mut found_metadata_tag = false;
 
-impl RpmMetadata for Otherdata {
-    fn deserialize<R: BufRead>(reader: &mut Reader<R>) -> Result<Otherdata, MetadataError> {
-        let mut other = Otherdata::default();
-        let mut buf = Vec::new();
-
-        let mut found_metadata_tag = false;
-
-        loop {
-            match reader.read_event(&mut buf)? {
-                Event::Start(e) => match e.name() {
-                    TAG_OTHERDATA => {
-                        found_metadata_tag = true;
-                    }
-                    TAG_PACKAGE => {
-                        let package = parse_package(reader, &e)?;
-                        other.packages.push(package);
-                    }
-                    _ => (),
-                },
-                Event::Eof => break,
-                Event::Decl(_) => (), // TOOD
+    loop {
+        match reader.read_event(&mut buf)? {
+            Event::Start(e) => match e.name() {
+                TAG_OTHERDATA => {
+                    found_metadata_tag = true;
+                }
+                TAG_PACKAGE => {
+                    parse_package(repository, reader, &e)?;
+                }
                 _ => (),
-            }
+            },
+            Event::Eof => break,
+            Event::Decl(_) => (), // TOOD
+            _ => (),
         }
-        if !found_metadata_tag {
-            // TODO
-        }
-        Ok(other)
     }
-
-    fn serialize<W: Write>(&self, writer: &mut Writer<W>) -> Result<(), MetadataError> {
-        writer.write_event(Event::Decl(BytesDecl::new(b"1.0", Some(b"UTF-8"), None)))?;
-
-        let mut other_tag = BytesStart::borrowed_name(TAG_OTHERDATA);
-        other_tag.push_attribute(("xmlns", XML_NS_OTHER));
-
-        // <filelists>
-        writer.write_event(Event::Start(other_tag.to_borrowed()))?;
-
-        // <packages>
-        for package in &self.packages {
-            let mut package_tag = BytesStart::borrowed_name(TAG_PACKAGE);
-            package_tag.push_attribute(("pkgid".as_bytes(), package.pkgid.as_bytes()));
-            package_tag.push_attribute(("name".as_bytes(), package.name.as_bytes()));
-            package_tag.push_attribute(("arch".as_bytes(), package.arch.as_bytes()));
-            writer.write_event(Event::Start(package_tag.to_borrowed()))?;
-
-            let (epoch, version, release) = package.version.values();
-            // <version epoch="0" ver="2.8.0" rel="5.el6"/>
-            let mut version_tag = BytesStart::borrowed_name(TAG_VERSION);
-            version_tag.push_attribute(("epoch".as_bytes(), epoch.as_bytes()));
-            version_tag.push_attribute(("ver".as_bytes(), version.as_bytes()));
-            version_tag.push_attribute(("rel".as_bytes(), release.as_bytes()));
-            writer.write_event(Event::Empty(version_tag))?;
-
-            for changelog in &package.changelogs {
-                //  <changelog author="dalley &lt;dalley@redhat.com&gt; - 2.7.2-1" date="1251720000">- Update to 2.7.2</changelog>
-                writer
-                    .create_element(TAG_CHANGELOG)
-                    .with_attribute(("author".as_bytes(), changelog.author.as_str().as_bytes()))
-                    .with_attribute((
-                        "date".as_bytes(),
-                        format!("{}", changelog.date).as_str().as_bytes(),
-                    ))
-                    .write_text_content(BytesText::from_plain_str(&changelog.description))?;
-            }
-
-            writer.write_event(Event::End(package_tag.to_end()))?;
-        }
-        writer.write_event(Event::End(other_tag.to_end()))?;
-        Ok(())
+    if !found_metadata_tag {
+        // TODO
     }
+    Ok(())
+}
+
+pub fn write_other_xml<W: Write>(
+    repository: &RpmRepository,
+    writer: &mut Writer<W>,
+) -> Result<(), MetadataError> {
+    // <?xml version="1.0" encoding="UTF-8"?>
+    writer.write_event(Event::Decl(BytesDecl::new(b"1.0", Some(b"UTF-8"), None)))?;
+
+    // <otherdata xmlns="http://linux.duke.edu/metadata/other" packages="200">
+    let mut other_tag = BytesStart::borrowed_name(TAG_OTHERDATA);
+    other_tag.push_attribute(("xmlns", XML_NS_OTHER));
+    other_tag.push_attribute(("packages", repository.packages.len().to_string().as_str()));
+
+    // <filelists>
+    writer.write_event(Event::Start(other_tag.to_borrowed()))?;
+
+    // <packages>
+    for package in repository.packages.values() {
+        let mut package_tag = BytesStart::borrowed_name(TAG_PACKAGE);
+        let (_, pkgid) = package.checksum.to_values()?;
+        package_tag.push_attribute(("pkgid".as_bytes(), pkgid.as_bytes()));
+        package_tag.push_attribute(("name".as_bytes(), package.name.as_bytes()));
+        package_tag.push_attribute(("arch".as_bytes(), package.arch.as_bytes()));
+        writer.write_event(Event::Start(package_tag.to_borrowed()))?;
+
+        let (epoch, version, release) = package.evr.values();
+        // <version epoch="0" ver="2.8.0" rel="5.el6"/>
+        let mut version_tag = BytesStart::borrowed_name(TAG_VERSION);
+        version_tag.push_attribute(("epoch".as_bytes(), epoch.as_bytes()));
+        version_tag.push_attribute(("ver".as_bytes(), version.as_bytes()));
+        version_tag.push_attribute(("rel".as_bytes(), release.as_bytes()));
+        writer.write_event(Event::Empty(version_tag))?;
+
+        for changelog in &package.rpm_changelogs {
+            //  <changelog author="dalley &lt;dalley@redhat.com&gt; - 2.7.2-1" date="1251720000">- Update to 2.7.2</changelog>
+            writer
+                .create_element(TAG_CHANGELOG)
+                .with_attribute(("author".as_bytes(), changelog.author.as_str().as_bytes()))
+                .with_attribute((
+                    "date".as_bytes(),
+                    format!("{}", changelog.date).as_str().as_bytes(),
+                ))
+                .write_text_content(BytesText::from_plain_str(&changelog.description))?;
+        }
+
+        // </package>
+        writer.write_event(Event::End(package_tag.to_end()))?;
+    }
+    // </otherdata>
+    writer.write_event(Event::End(other_tag.to_end()))?;
+    Ok(())
 }
 
 //   <package pkgid="6a915b6e1ad740994aa9688d70a67ff2b6b72e0ced668794aeb27b2d0f2e237b" name="fontconfig" arch="x86_64">
@@ -126,24 +131,38 @@ impl RpmMetadata for Otherdata {
 //     <changelog author="Behdad Esfahbod &lt;besfahbo@redhat.com&gt; - 2.8.0-1" date="1259841600">- Update to 2.8.0</changelog>
 //   </package>
 pub fn parse_package<R: BufRead>(
+    repository: &mut RpmRepository,
     reader: &mut Reader<R>,
     open_tag: &BytesStart,
-) -> Result<Package, MetadataError> {
-    let mut package = Package::default();
+) -> Result<(), MetadataError> {
     let mut buf = Vec::new();
 
-    package.pkgid = open_tag
+    let pkgid = open_tag
         .try_get_attribute("pkgid")?
-        .unwrap()
+        .ok_or_else(|| MetadataError::MissingAttributeError("pkgid"))?
         .unescape_and_decode_value(reader)?;
-    package.name = open_tag
+    let name = open_tag
         .try_get_attribute("name")?
-        .unwrap()
+        .ok_or_else(|| MetadataError::MissingAttributeError("name"))?
         .unescape_and_decode_value(reader)?;
-    package.arch = open_tag
+    let arch = open_tag
         .try_get_attribute("arch")?
-        .unwrap()
+        .ok_or_else(|| MetadataError::MissingAttributeError("arch"))?
         .unescape_and_decode_value(reader)?;
+
+    let mut package = repository
+        .packages
+        .entry(pkgid)
+        .or_insert(Package::default()); // TODO
+
+    // TODO: using empty strings as null value is slightly questionable
+    if package.name.is_empty() {
+        package.name = name.to_owned();
+    }
+
+    if package.arch.is_empty() {
+        package.arch = arch.to_owned();
+    }
 
     loop {
         match reader.read_event(&mut buf)? {
@@ -151,11 +170,11 @@ pub fn parse_package<R: BufRead>(
 
             Event::Start(e) => match e.name() {
                 TAG_VERSION => {
-                    package.version = parse_version(reader, &e)?;
+                    package.evr = parse_evr(reader, &e)?;
                 }
                 TAG_CHANGELOG => {
                     let file = parse_changelog(reader, &e)?;
-                    package.changelogs.push(file);
+                    package.rpm_changelogs.push(file);
                 }
                 _ => (),
             },
@@ -163,11 +182,11 @@ pub fn parse_package<R: BufRead>(
         }
     }
 
-    Ok(package)
+    Ok(())
 }
 
 // <version epoch="0" ver="2.8.0" rel="5.el6"/>
-pub fn parse_version<R: BufRead>(
+pub fn parse_evr<R: BufRead>(
     reader: &mut Reader<R>,
     open_tag: &BytesStart,
 ) -> Result<EVR, MetadataError> {

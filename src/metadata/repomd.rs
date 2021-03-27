@@ -1,18 +1,19 @@
+use std::convert::{TryFrom, TryInto};
 use std::io::{BufRead, Write};
+use std::time::SystemTime;
 
 // use super::metadata::RpmMetadata;
-use quick_xml::{
-    events::{BytesDecl, BytesStart, BytesText, Event},
-    Reader, Writer,
-};
+use quick_xml::events::{BytesDecl, BytesStart, BytesText, Event};
+use quick_xml::{Reader, Writer};
 
-use super::common::Checksum;
-use super::metadata::{MetadataError, RpmMetadata, XML_NS_REPO, XML_NS_RPM};
+use super::metadata::{
+    Checksum, MetadataError, RepoMdRecord, RepomdXml, RpmMetadata, XML_NS_REPO, XML_NS_RPM,
+};
+use super::RpmRepository;
 
 // RepoMd
 const TAG_REPOMD: &[u8] = b"repomd";
 const TAG_REVISION: &[u8] = b"revision";
-const TAG_CONTENTHASH: &[u8] = b"contenthash";
 const TAG_TAGS: &[u8] = b"tags";
 const TAG_DATA: &[u8] = b"data";
 // Tags
@@ -30,305 +31,131 @@ const TAG_OPEN_SIZE: &[u8] = b"open-size";
 const TAG_HEADER_SIZE: &[u8] = b"header-size";
 const TAG_DATABASE_VERSION: &[u8] = b"database_version";
 
-const METADATA_PRIMARY: &str = "primary";
-const METADATA_FILELISTS: &str = "filelists";
-const METADATA_OTHER: &str = "other";
-const METADATA_PRIMARY_DB: &str = "primary_db";
-const METADATA_FILELISTS_DB: &str = "filelists_db";
-const METADATA_OTHER_DB: &str = "other_db";
-const METADATA_PRIMARY_ZCK: &str = "primary_zck";
-const METADATA_FILELISTS_ZCK: &str = "filelists_zck";
-const METADATA_OTHER_ZCK: &str = "other_zck";
+impl RpmMetadata for RepomdXml {
+    const NAME: &'static str = "repomd.xml";
 
-#[derive(Debug, PartialEq)]
-pub enum MetadataType {
-    Primary,
-    Filelists,
-    Other,
-
-    PrimaryZck,
-    FilelistsZck,
-    OtherZck,
-
-    PrimaryDb,
-    FilelistsDb,
-    OtherDb,
-
-    Unknown,
-}
-
-impl From<&str> for MetadataType {
-    fn from(name: &str) -> Self {
-        match name {
-            METADATA_PRIMARY => MetadataType::Primary,
-            METADATA_FILELISTS => MetadataType::Filelists,
-            METADATA_OTHER => MetadataType::Other,
-
-            METADATA_PRIMARY_DB => MetadataType::PrimaryDb,
-            METADATA_FILELISTS_DB => MetadataType::FilelistsDb,
-            METADATA_OTHER_DB => MetadataType::OtherDb,
-
-            METADATA_PRIMARY_ZCK => MetadataType::PrimaryZck,
-            METADATA_FILELISTS_ZCK => MetadataType::FilelistsZck,
-            METADATA_OTHER_ZCK => MetadataType::OtherZck,
-
-            _ => MetadataType::Unknown,
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Default)]
-pub struct Distro {
-    cpeid: Option<String>,
-    name: String,
-}
-
-#[derive(Debug, PartialEq, Default)]
-pub struct RepoMdRecord {
-    // TODO: location on disk?
-
-    /// Record type
-    mdtype: String,
-    /// Relative location of the file in a repository
-    pub location_href: String,
-    /// Mtime of the file
-    timestamp: u64,
-    /// Size of the file
-    size: u64,
-    /// Checksum of the file
-    pub checksum: Checksum,
-
-    /// Size of the archive content
-    open_size: Option<u64>,
-    /// Checksum of the archive content
-    open_checksum: Option<Checksum>,
-
-    /// Size of the Zchunk header
-    header_size: Option<u64>,
-    /// Checksum of the Zchunk header
-    header_checksum: Option<Checksum>,
-
-    /// Database version (used only for sqlite databases like primary.sqlite etc.)
-    database_version: Option<u32>,
-}
-
-#[derive(Debug, PartialEq, Default)]
-pub struct RepoMd {
-    revision: String,
-    data: Vec<RepoMdRecord>,
-    repo_tags: Vec<String>,
-    content_tags: Vec<String>,
-    distro_tags: Vec<Distro>,
-    contenthash: Option<Checksum>, // checksum of metatadata of packages in a sorted order
-}
-
-impl RepoMd {
-    pub fn add_record(&mut self, record: RepoMdRecord) {
-        self.data.push(record);
-    }
-
-    pub fn get_record(&self, rectype: &str) -> Option<&RepoMdRecord> {
-        self.records().iter().find(|r| &r.mdtype == rectype)
-    }
-
-    pub fn records(&self) -> &Vec<RepoMdRecord> {
-        &self.data
-    }
-
-    pub fn remove_record(&mut self, rectype: &str) {
-        self.data.retain(|r| &r.mdtype != rectype);
-    }
-
-    pub fn add_repo_tag(&mut self, repo: String) {
-        self.repo_tags.push(repo)
-    }
-
-    pub fn repo_tags(&self) -> &Vec<String> {
-        &self.repo_tags
-    }
-
-    pub fn add_content_tag(&mut self, content: String) {
-        self.content_tags.push(content)
-    }
-
-    pub fn content_tags(&self) -> &Vec<String> {
-        &self.content_tags
-    }
-
-    pub fn add_distro_tag(&mut self, name: String, cpeid: Option<String>) {
-        let distro = Distro { name, cpeid };
-        self.distro_tags.push(distro)
-    }
-
-    pub fn distro_tags(&self) -> &Vec<Distro> {
-        &self.distro_tags
-    }
-
-    pub fn sort_records(&mut self) {
-        fn value(item: &RepoMdRecord) -> u32 {
-            let mdtype = MetadataType::from(item.mdtype.as_str());
-            match mdtype {
-                MetadataType::Primary => 1,
-                MetadataType::Filelists => 2,
-                MetadataType::Other => 3,
-                MetadataType::PrimaryDb => 4,
-                MetadataType::FilelistsDb => 5,
-                MetadataType::OtherDb => 6,
-                MetadataType::PrimaryZck => 7,
-                MetadataType::FilelistsZck => 8,
-                MetadataType::OtherZck => 9,
-                MetadataType::Unknown => 10,
-            }
-        }
-        self.data.sort_by(|a, b| value(a).cmp(&value(b)));
-    }
-
-    pub fn set_contenthash(&mut self, contenthash: Checksum) {
-        self.contenthash = Some(contenthash);
-    }
-
-    pub fn contenthash(&self) -> Option<&Checksum> {
-        self.contenthash.as_ref()
-    }
-
-    pub fn set_revision(&mut self, revision: String) {
-        self.revision = revision;
-    }
-
-    pub fn revision(&self) -> &str {
-        &self.revision
-    }
-
-    pub fn metadata_files(&self) -> &[RepoMdRecord] {
-        &self.data
-    }
-
-    pub fn get_primary_data(&self) -> &RepoMdRecord {
-        self.get_record(METADATA_PRIMARY)
-            .expect("Cannot find primary.xml")
-    }
-
-    pub fn get_filelist_data(&self) -> &RepoMdRecord {
-        self.get_record(METADATA_FILELISTS)
-            .expect("Cannot find filelists.xml")
-    }
-
-    pub fn get_other_data(&self) -> &RepoMdRecord {
-        self.get_record(METADATA_OTHER)
-            .expect("Cannot find other.xml")
-    }
-}
-
-impl RpmMetadata for RepoMd {
-    fn deserialize<R: BufRead>(reader: &mut Reader<R>) -> Result<RepoMd, MetadataError> {
-        let mut repomd = RepoMd::default();
-        let mut buf = Vec::new();
-        let mut record_buf = Vec::new();
-
-        let mut found_metadata_tag = false;
-
-        loop {
-            match reader.read_event(&mut buf)? {
-                Event::Start(e) => match e.name() {
-                    TAG_REPOMD => {
-                        found_metadata_tag = true;
-                    }
-                    TAG_REVISION => {
-                        repomd.revision = reader.read_text(e.name(), &mut record_buf)?;
-                    }
-                    TAG_DATA => {
-                        let data = parse_repomdrecord(reader, &e)?;
-                        repomd.add_record(data);
-                    }
-                    TAG_CONTENTHASH => {
-                        let contenthash_type = (&e).try_get_attribute("type")?.unwrap();
-                        let contenthash = reader.read_text(e.name(), &mut record_buf)?;
-                        let contenthash = Checksum::try_create(
-                            contenthash_type.value.as_ref(),
-                            contenthash.as_bytes(),
-                        )?;
-                        repomd.set_contenthash(contenthash);
-                    }
-                    TAG_TAGS => {
-                        //   <tags>
-                        //     <repo>Fedora</repo>
-                        //     <content>binary-x86_64</content>
-                        //     <distro cpeid="cpe:/o:fedoraproject:fedora:33">Fedora 33</distro>
-                        //   </tags>
-                        let mut tags_buf = Vec::new();
-                        loop {
-                            match reader.read_event(&mut record_buf)? {
-                                Event::Start(e) => match e.name() {
-                                    TAG_DISTRO => {
-                                        let cpeid = (&e)
-                                            .try_get_attribute("cpeid")?
-                                            .and_then(|a| a.unescape_and_decode_value(reader).ok());
-                                        let name = reader.read_text(TAG_DISTRO, &mut Vec::new())?;
-                                        repomd.add_distro_tag(name, cpeid);
-                                    }
-                                    TAG_REPO => {
-                                        let content = reader.read_text(e.name(), &mut tags_buf)?;
-                                        repomd.add_repo_tag(content);
-                                    }
-                                    TAG_CONTENT => {
-                                        let content = reader.read_text(e.name(), &mut tags_buf)?;
-                                        repomd.add_content_tag(content);
-                                    }
-                                    _ => (),
-                                },
-
-                                Event::End(e) if e.name() == TAG_TAGS => break,
-                                _ => (),
-                            }
-                            tags_buf.clear();
-                        }
-                    }
-                    _ => (),
-                },
-                Event::Eof => break,
-                Event::Decl(_) => (), // TOOD
-                _ => (),
-            }
-        }
-        if !found_metadata_tag {
-            // TODO
-        }
-        Ok(repomd)
-    }
-
-    fn serialize<W: Write>(&self, writer: &mut Writer<W>) -> Result<(), MetadataError> {
-        // <?xml version="1.0" encoding="UTF-8"?>
-        writer.write_event(Event::Decl(BytesDecl::new(b"1.0", Some(b"UTF-8"), None)))?;
-
-        // <repomd xmlns="http://linux.duke.edu/metadata/repo" xmlns:rpm="http://linux.duke.edu/metadata/rpm">
-        let mut repomd_tag = BytesStart::borrowed_name(TAG_REPOMD);
-        repomd_tag.push_attribute(("xmlns", XML_NS_REPO));
-        repomd_tag.push_attribute(("xmlns:rpm", XML_NS_RPM));
-        writer.write_event(Event::Start(repomd_tag.to_borrowed()))?;
-
-        // <revision>123897</revision>
-        writer
-            .create_element(TAG_REVISION)
-            .write_text_content(BytesText::from_plain_str(&self.revision()))?;
-
-        // <contenthash type="sha256">09e1ee2ecaca3e43382e8db290922fd7c6533d56c397978893bb946f392f759d</contenthash>
-        if let Some(contenthash) = self.contenthash() {
-            let (contenthash_type, contenthash_value) = contenthash.to_values();
-            writer
-                .create_element(TAG_CONTENTHASH)
-                .with_attribute(("type", contenthash_type))
-                .write_text_content(BytesText::from_plain_str(contenthash_value))?;
-        }
-
-        write_tags(writer, &self)?;
-        for data in self.records() {
-            write_data(writer, data)?;
-        }
-
-        // </repomd>
-        writer.write_event(Event::End(repomd_tag.to_end()))?;
+    fn load_metadata<R: BufRead>(
+        repository: &mut RpmRepository,
+        reader: &mut Reader<R>,
+    ) -> Result<(), MetadataError> {
+        read_repomd_xml(repository, reader)?;
         Ok(())
     }
+
+    fn write_metadata<W: Write>(
+        repository: &RpmRepository,
+        writer: &mut Writer<W>,
+    ) -> Result<(), MetadataError> {
+        write_repomd_xml(repository, writer)
+    }
+}
+
+fn read_repomd_xml<R: BufRead>(
+    repository: &mut RpmRepository,
+    reader: &mut Reader<R>,
+) -> Result<(), MetadataError> {
+    let mut event_buf = Vec::new();
+    let mut text_buf = Vec::new();
+
+    let mut found_metadata_tag = false;
+
+    loop {
+        match reader.read_event(&mut event_buf)? {
+            Event::Start(e) => match e.name() {
+                TAG_REPOMD => {
+                    found_metadata_tag = true;
+                }
+                TAG_REVISION => {
+                    repository.revision = Some(reader.read_text(e.name(), &mut text_buf)?);
+                }
+                TAG_DATA => {
+                    let data = parse_repomdrecord(reader, &e)?;
+                    repository.add_record(data);
+                }
+                TAG_TAGS => {
+                    //   <tags>
+                    //     <repo>Fedora</repo>
+                    //     <content>binary-x86_64</content>
+                    //     <distro cpeid="cpe:/o:fedoraproject:fedora:33">Fedora 33</distro>
+                    //   </tags>
+                    loop {
+                        match reader.read_event(&mut event_buf)? {
+                            Event::Start(e) => match e.name() {
+                                TAG_DISTRO => {
+                                    let cpeid = (&e)
+                                        .try_get_attribute("cpeid")?
+                                        .and_then(|a| a.unescape_and_decode_value(reader).ok());
+                                    let name = reader.read_text(TAG_DISTRO, &mut text_buf)?;
+                                    repository.add_distro_tag(name, cpeid);
+                                }
+                                TAG_REPO => {
+                                    let repo = reader.read_text(e.name(), &mut text_buf)?;
+                                    repository.add_repo_tag(repo);
+                                }
+                                TAG_CONTENT => {
+                                    let content = reader.read_text(e.name(), &mut text_buf)?;
+                                    repository.add_content_tag(content);
+                                }
+                                _ => (),
+                            },
+
+                            Event::End(e) if e.name() == TAG_TAGS => break,
+                            _ => (),
+                        }
+                        &text_buf.clear();
+                    }
+                }
+                _ => (),
+            },
+            Event::Eof => break,
+            Event::Decl(_) => (),
+            _ => (),
+        }
+        text_buf.clear()
+    }
+    if !found_metadata_tag {
+        // TODO
+    }
+    Ok(())
+}
+
+fn write_repomd_xml<W: Write>(
+    repository: &RpmRepository,
+    writer: &mut Writer<W>,
+) -> Result<(), MetadataError> {
+    // <?xml version="1.0" encoding="UTF-8"?>
+    writer.write_event(Event::Decl(BytesDecl::new(b"1.0", Some(b"UTF-8"), None)))?;
+
+    // <repomd xmlns="http://linux.duke.edu/metadata/repo" xmlns:rpm="http://linux.duke.edu/metadata/rpm">
+    let mut repomd_tag = BytesStart::borrowed_name(TAG_REPOMD);
+    repomd_tag.push_attribute(("xmlns", XML_NS_REPO));
+    repomd_tag.push_attribute(("xmlns:rpm", XML_NS_RPM));
+    writer.write_event(Event::Start(repomd_tag.to_borrowed()))?;
+
+    // <revision>123897</revision>
+    let _revision = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .expect("system clock failure")
+        .as_secs()
+        .to_string();
+    // TODO, find a less messy way  to do this.
+    let revision = &repository.revision.as_ref().unwrap_or(&_revision);
+
+    writer
+        .create_element(TAG_REVISION)
+        .write_text_content(BytesText::from_plain_str(revision.as_str()))?;
+
+    write_tags(repository, writer)?;
+    for data in repository.records() {
+        write_data(writer, data)?;
+    }
+
+    // </repomd>
+    writer.write_event(Event::End(repomd_tag.to_end()))?;
+
+    // trailing newline
+    writer.write_event(Event::Text(BytesText::from_plain_str("\n")))?;
+    Ok(())
 }
 
 // <data type="other_db">
@@ -344,18 +171,58 @@ pub fn parse_repomdrecord<R: BufRead>(
     reader: &mut Reader<R>,
     open_tag: &BytesStart,
 ) -> Result<RepoMdRecord, MetadataError> {
-    let mut record = RepoMdRecord::default();
+    #[derive(Debug, PartialEq, Default)]
+    struct RepoMdRecordBuilder {
+        mdtype: String,
+        location_href: Option<String>,
+        timestamp: Option<u64>,
+        size: Option<u64>,
+        checksum: Option<Checksum>,
+        open_size: Option<u64>,
+        open_checksum: Option<Checksum>,
+        header_size: Option<u64>,
+        header_checksum: Option<Checksum>,
+        database_version: Option<u32>,
+    }
 
-    record.mdtype = String::from_utf8(
-        open_tag
-            .try_get_attribute("type")?
-            .unwrap()
-            .value
-            .iter()
-            .cloned()
-            .collect(),
-    )
-    .map_err(|e| e.utf8_error())?;
+    impl TryFrom<RepoMdRecordBuilder> for RepoMdRecord {
+        type Error = MetadataError;
+
+        fn try_from(builder: RepoMdRecordBuilder) -> Result<Self, Self::Error> {
+            let record = RepoMdRecord {
+                mdtype: builder.mdtype,
+                location_href: builder
+                    .location_href
+                    .ok_or_else(|| MetadataError::MissingFieldError("location_href"))?,
+                timestamp: builder
+                    .timestamp
+                    .ok_or_else(|| MetadataError::MissingFieldError("timestamp"))?,
+                size: builder
+                    .size
+                    .ok_or_else(|| MetadataError::MissingFieldError("size"))?,
+                checksum: builder
+                    .checksum
+                    .ok_or_else(|| MetadataError::MissingFieldError("checksum"))?,
+                open_size: builder.open_size,
+                open_checksum: builder.open_checksum, // TODO: do these need to be conditionally required?
+                header_size: builder.header_size,
+                header_checksum: builder.header_checksum,
+                database_version: builder.database_version,
+            };
+            Ok(record)
+        }
+    }
+
+    let mut record_builder = RepoMdRecordBuilder::default();
+
+    let record_type = open_tag
+        .try_get_attribute("type")?
+        .ok_or_else(|| MetadataError::MissingAttributeError("type"))?
+        .value
+        .iter()
+        .cloned()
+        .collect();
+    record_builder.mdtype = String::from_utf8(record_type).map_err(|e| e.utf8_error())?; // TODO weird conversion
 
     let mut buf = Vec::new();
     let mut record_buf = Vec::new();
@@ -364,48 +231,64 @@ pub fn parse_repomdrecord<R: BufRead>(
         match reader.read_event(&mut buf)? {
             Event::Start(e) => match e.name() {
                 TAG_CHECKSUM => {
-                    let checksum_type = (&e).try_get_attribute("type")?.unwrap();
-                    let checksum = reader.read_text(e.name(), &mut record_buf)?;
-                    record.checksum =
-                        Checksum::try_create(checksum_type.value.as_ref(), checksum.as_bytes())?;
+                    let checksum_type = e
+                        .try_get_attribute("type")?
+                        .ok_or_else(|| MetadataError::MissingAttributeError("type"))?;
+                    let checksum_value = reader.read_text(e.name(), &mut record_buf)?;
+                    let checksum = Checksum::try_create(
+                        checksum_type.value.as_ref(),
+                        checksum_value.as_bytes(),
+                    )?;
+                    record_builder.checksum = Some(checksum);
                 }
                 TAG_OPEN_CHECKSUM => {
-                    let checksum_type = (&e).try_get_attribute("type")?.unwrap();
-                    let checksum = reader.read_text(e.name(), &mut record_buf)?;
-                    record.open_checksum = Some(Checksum::try_create(
+                    let checksum_type = e
+                        .try_get_attribute("type")?
+                        .ok_or_else(|| MetadataError::MissingAttributeError("type"))?;
+                    let checksum_value = reader.read_text(e.name(), &mut record_buf)?;
+                    let checksum = Checksum::try_create(
                         checksum_type.value.as_ref(),
-                        checksum.as_bytes(),
-                    )?);
+                        checksum_value.as_bytes(),
+                    )?;
+                    record_builder.open_checksum = Some(checksum);
                 }
                 TAG_HEADER_CHECKSUM => {
-                    let checksum_type = (&e).try_get_attribute("type")?.unwrap();
-                    let checksum = reader.read_text(e.name(), &mut record_buf)?;
-                    record.header_checksum = Some(Checksum::try_create(
+                    let checksum_type = e
+                        .try_get_attribute("type")?
+                        .ok_or_else(|| MetadataError::MissingAttributeError("type"))?;
+                    let checksum_value = reader.read_text(e.name(), &mut record_buf)?;
+                    let checksum = Checksum::try_create(
                         checksum_type.value.as_ref(),
-                        checksum.as_bytes(),
-                    )?);
+                        checksum_value.as_bytes(),
+                    )?;
+                    record_builder.header_checksum = Some(checksum);
                 }
                 TAG_LOCATION => {
-                    record.location_href = (&e)
+                    let location = e
                         .try_get_attribute("href")?
-                        .unwrap()
+                        .ok_or_else(|| MetadataError::MissingAttributeError("href"))?
                         .unescape_and_decode_value(reader)?;
+                    record_builder.location_href = Some(location);
                 }
                 TAG_TIMESTAMP => {
-                    record.timestamp = reader.read_text(e.name(), &mut record_buf)?.parse()?;
+                    let timestamp = reader.read_text(e.name(), &mut record_buf)?.parse()?;
+                    record_builder.timestamp = Some(timestamp);
                 }
                 TAG_SIZE => {
-                    record.size = reader.read_text(e.name(), &mut record_buf)?.parse()?;
+                    let size = reader.read_text(e.name(), &mut record_buf)?.parse()?;
+                    record_builder.size = Some(size);
                 }
                 TAG_HEADER_SIZE => {
-                    record.header_size = reader.read_text(e.name(), &mut record_buf)?.parse().ok();
+                    let header_size = reader.read_text(e.name(), &mut record_buf)?.parse()?;
+                    record_builder.header_size = Some(header_size);
                 }
                 TAG_OPEN_SIZE => {
-                    record.open_size = reader.read_text(e.name(), &mut record_buf)?.parse().ok();
+                    let open_size = reader.read_text(e.name(), &mut record_buf)?.parse()?;
+                    record_builder.open_size = Some(open_size);
                 }
                 TAG_DATABASE_VERSION => {
-                    record.database_version =
-                        reader.read_text(e.name(), &mut record_buf)?.parse().ok();
+                    let database_version = reader.read_text(e.name(), &mut record_buf)?.parse()?;
+                    record_builder.database_version = Some(database_version);
                 }
                 _ => (),
             },
@@ -414,7 +297,7 @@ pub fn parse_repomdrecord<R: BufRead>(
         }
         record_buf.clear();
     }
-    Ok(record)
+    Ok(record_builder.try_into()?)
 }
 
 /// <tags>
@@ -422,36 +305,41 @@ pub fn parse_repomdrecord<R: BufRead>(
 ///   <distro cpeid="cpe:/o:fedoraproject:fedora:33">Fedora 33</distro>
 ///   <content>binary-x86_64</content>
 //// </tags>
-fn write_tags<W: Write>(writer: &mut Writer<W>, repomd: &RepoMd) -> Result<(), quick_xml::Error> {
-    let has_distro_tags = !repomd.distro_tags().is_empty();
-    let has_repo_tags = !repomd.repo_tags().is_empty();
-    let has_content_tags = !repomd.content_tags().is_empty();
+fn write_tags<W: Write>(
+    repository: &RpmRepository,
+    writer: &mut Writer<W>,
+) -> Result<(), MetadataError> {
+    let has_distro_tags = !repository.distro_tags().is_empty();
+    let has_repo_tags = !repository.repo_tags().is_empty();
+    let has_content_tags = !repository.content_tags().is_empty();
 
     if has_distro_tags || has_repo_tags || has_content_tags {
         // <tags>
-        let tags_tag = BytesStart::borrowed_name(TAG_DATA);
+        let tags_tag = BytesStart::borrowed_name(TAG_TAGS);
         writer.write_event(Event::Start(tags_tag.to_borrowed()))?;
 
-        for item in repomd.repo_tags() {
-            // <repo>Fedora</repo>
-            writer
-                .create_element(TAG_REPO)
-                .write_text_content(BytesText::from_plain_str(&item))?;
-        }
-
-        for item in repomd.content_tags() {
+        for item in repository.content_tags() {
             // <content>binary-x86_64</content>
             writer
                 .create_element(TAG_CONTENT)
                 .write_text_content(BytesText::from_plain_str(&item))?;
         }
 
-        for item in repomd.distro_tags() {
+        for item in repository.repo_tags() {
+            // <repo>Fedora</repo>
+            writer
+                .create_element(TAG_REPO)
+                .write_text_content(BytesText::from_plain_str(&item))?;
+        }
+
+        for item in repository.distro_tags() {
             // <distro cpeid="cpe:/o:fedoraproject:fedora:33">Fedora 33</distro>
             let mut distro_tag = BytesStart::borrowed_name(TAG_DISTRO);
             if let Some(cpeid) = &item.cpeid {
                 distro_tag.push_attribute(("cpeid", cpeid.as_str()))
             }
+            writer.write_event(Event::Start(distro_tag.to_borrowed()))?;
+            writer.write_event(Event::Text(BytesText::from_plain_str(item.name.as_str())))?;
             writer.write_event(Event::End(distro_tag.to_end()))?;
         }
 
@@ -468,17 +356,14 @@ fn write_tags<W: Write>(writer: &mut Writer<W>, repomd: &RepoMd) -> Result<(), q
 ///    <size>5830735</size>
 ///    <open-size>53965949</open-size>
 ///  </data>
-fn write_data<W: Write>(
-    writer: &mut Writer<W>,
-    data: &RepoMdRecord,
-) -> Result<(), quick_xml::Error> {
+fn write_data<W: Write>(writer: &mut Writer<W>, data: &RepoMdRecord) -> Result<(), MetadataError> {
     // <data>
     let mut data_tag = BytesStart::borrowed_name(TAG_DATA);
     data_tag.push_attribute(("type".as_bytes(), data.mdtype.as_bytes()));
     writer.write_event(Event::Start(data_tag.to_borrowed()))?;
 
     // <checksum type="sha256">afdc6dc379e58d097ed0b350536812bc6a604bbce50c5c109d8d98e28301dc4b</checksum>
-    let (checksum_type, checksum_value) = data.checksum.to_values();
+    let (checksum_type, checksum_value) = data.checksum.to_values()?;
     writer
         .create_element(TAG_CHECKSUM)
         .with_attribute(("type", checksum_type))
@@ -486,7 +371,7 @@ fn write_data<W: Write>(
 
     // <open-checksum type="sha256">afdc6dc379e58d097ed0b350536812bc6a604bbce50c5c109d8d98e28301dc4b</open-checksum> (maybe)
     if let Some(open_checksum) = &data.open_checksum {
-        let (checksum_type, checksum_value) = open_checksum.to_values();
+        let (checksum_type, checksum_value) = open_checksum.to_values()?;
         writer
             .create_element(TAG_OPEN_CHECKSUM)
             .with_attribute(("type", checksum_type))
@@ -495,7 +380,7 @@ fn write_data<W: Write>(
 
     // <header-checksum type="sha256">afdc6dc379e58d097ed0b350536812bc6a604bbce50c5c109d8d98e28301dc4b</header-checksum> (maybe)
     if let Some(header_checksum) = &data.header_checksum {
-        let (checksum_type, checksum_value) = header_checksum.to_values();
+        let (checksum_type, checksum_value) = header_checksum.to_values()?;
         writer
             .create_element(TAG_HEADER_CHECKSUM)
             .with_attribute(("type", checksum_type))
@@ -545,106 +430,4 @@ fn write_data<W: Write>(
     writer.write_event(Event::End(data_tag.to_end()))?;
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::metadata::MetadataIO;
-    use once_cell::sync::OnceCell;
-    use pretty_assertions::assert_eq;
-    use std::path::Path;
-
-    const FIXTURE_REPOMD_PATH: &str = "./tests/assets/complex_repo/repodata/repomd.xml";
-
-    /// Fixture should cover all fields / tag types for repomd.xml
-    /// Started w/ Fedora 33 updates repodata, added contenthash + repo, content, distro tags
-    /// FilelistsDb covers standard fields + database_version, UpdateInfoZck covers header_size, header_checksum
-    fn fixture_data() -> &'static RepoMd {
-        static INSTANCE: OnceCell<RepoMd> = OnceCell::new();
-        INSTANCE.get_or_init(|| {
-            let mut repomd = RepoMd::default();
-            repomd.set_revision(String::from("1615686706"));
-            // repomd.set_contenthash(Checksum::SHA256(String::from("09e1ee2ecaca3e43382e8db290922fd7c6533d56c397978893bb946f392f759d")));
-            repomd.add_repo_tag(String::from("Fedora"));
-            repomd.add_repo_tag(String::from("Fedora-Updates"));
-            repomd.add_content_tag(String::from("binary-x86_64"));
-            repomd.add_distro_tag(
-                String::from("Fedora 33"),
-                Some(String::from("cpe:/o:fedoraproject:fedora:33")),
-            );
-            repomd
-        })
-    }
-
-    /// Test deserialization of repomd with full coverage of all fields of RepoMd and RepoMdRecord
-    #[test]
-    fn test_deserialization() -> Result<(), MetadataError> {
-        let actual = &RepoMd::from_file(Path::new(FIXTURE_REPOMD_PATH))?;
-        let expected = fixture_data();
-
-        assert_eq!(actual.revision(), expected.revision());
-        assert_eq!(actual.contenthash(), expected.contenthash());
-        assert_eq!(actual.repo_tags(), expected.repo_tags());
-        assert_eq!(actual.content_tags(), expected.content_tags());
-        assert_eq!(actual.distro_tags(), expected.distro_tags());
-
-        // TODO
-        // assert_eq!(
-        //     actual.get_record("filelists_db"),
-        //     expected.get_record("filelists_db")
-        // );
-        // assert_eq!(
-        //     actual.get_record("updateinfo_zck"),
-        //     expected.get_record("updateinfo_zck")
-        // );
-
-        // assert_eq!(actual.records().len(), 17);
-        // let expected_types = vec![
-        //     "primary",
-        //     "filelists",
-        //     "other",
-        //     "primary_db",
-        //     "filelists_db",
-        //     "other_db",
-        //     "primary_zck",
-        //     "filelists_zck",
-        //     "other_zck",
-        // ];
-        // let actual_types = actual
-        //     .records()
-        //     .iter()
-        //     .map(|r| r.mdtype.as_str())
-        //     .collect::<Vec<&str>>();
-        // assert_eq!(actual_types, expected_types);
-
-        Ok(())
-    }
-
-    // /// Test Serialization on a real repomd.xml (Fedora 33 x86_64 release "everything")
-    // #[test]
-    // fn test_serialization() -> Result<(), MetadataError> {
-    //     let actual = fixture_data().to_string()?;
-
-    //     let mut expected = String::new();
-    //     File::open(FIXTURE_REPOMD_PATH)?.read_to_string(&mut expected)?;
-
-    //     assert_eq!(&expected, &actual);
-
-    //     Ok(())
-    // }
-
-    /// Test roundtrip (serialize + deserialize) on a real repomd.xml (Fedora 33 x86_64 release "everything")
-    #[test]
-    fn test_roundtrip() -> Result<(), MetadataError> {
-        let first_deserialize = RepoMd::from_file(Path::new(FIXTURE_REPOMD_PATH))?;
-        let first_serialize = first_deserialize.to_string()?;
-        let second_deserialize = RepoMd::from_str(&first_serialize)?;
-        let second_serialize = second_deserialize.to_string()?;
-
-        assert_eq!(first_deserialize, second_deserialize);
-        assert_eq!(first_serialize, second_serialize);
-
-        Ok(())
-    }
 }

@@ -11,8 +11,7 @@ use ureq;
 use url::Url;
 
 // use crate::metadata::RpmMetadata;
-use crate::metadata::{self, MetadataError, Primary};
-use crate::metadata::{MetadataIO, RepoMd};
+use crate::metadata::{self, MetadataError, PrimaryXml, RepomdXml};
 
 pub const DEFAULT_CONCURRENCY: u8 = 5;
 
