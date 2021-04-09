@@ -230,11 +230,11 @@ pub struct HeaderRange {
 #[derive(Debug, PartialEq, Default)]
 pub struct Requirement {
     pub name: String,
-    pub flags: String,
-    pub epoch: String,
-    pub version: String,
-    pub release: String,
-    pub preinstall: bool,
+    pub flags: Option<String>,
+    pub epoch: Option<String>,
+    pub version: Option<String>,
+    pub release: Option<String>,
+    pub preinstall: Option<bool>,
 }
 
 pub enum RequirementType {

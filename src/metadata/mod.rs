@@ -6,5 +6,5 @@ mod repomd;
 mod repository;
 mod updateinfo;
 
-pub use metadata::MetadataError;
+pub use metadata::{MetadataError, RepomdXml, PrimaryXml, FilelistsXml, OtherXml, UpdateInfoXml};
 pub use repository::RpmRepository;

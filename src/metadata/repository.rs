@@ -199,6 +199,8 @@ impl RpmRepository {
         &mut self,
         bytes: &[u8],
     ) -> Result<(), MetadataError> {
+        let (reader, _compression) = niffler::get_reader(Box::new(bytes))?;
+        let mut reader = Reader::from_reader(BufReader::new(reader));
         let mut reader = Reader::from_reader(bytes);
         configure_reader(&mut reader);
 

@@ -11,7 +11,7 @@ use ureq;
 use url::Url;
 
 // use crate::metadata::RpmMetadata;
-use crate::metadata::{self, MetadataError, PrimaryXml, RepomdXml};
+use crate::metadata::{self, RpmRepository, MetadataError, PrimaryXml, RepomdXml};
 
 pub const DEFAULT_CONCURRENCY: u8 = 5;
 
@@ -42,8 +42,6 @@ pub enum RepoDownloadError {
 pub struct RepoDownloader {
     base_url: Url,
     concurrency: u8,
-    // progress_cb: Option<dyn FnMut()>,
-    // end_cb: Option<dyn FnMut()>,
 }
 
 impl RepoDownloader {
@@ -51,8 +49,6 @@ impl RepoDownloader {
         RepoDownloader {
             base_url: url,
             concurrency: DEFAULT_CONCURRENCY,
-            // progress_cb: None,
-            // end_cb: None,
         }
     }
 
@@ -66,9 +62,11 @@ impl RepoDownloader {
     pub fn download_to(&self, repository_path: &Path) -> Result<(), RepoDownloadError> {
         let base_url = &self.base_url;
 
+        let mut repo = RpmRepository::new();
+
         let repomd_url = base_url.join("repodata/repomd.xml")?;
         let repomd_xml = &download_file(&repomd_url)?;
-        let repomd = RepoMd::from_bytes(repomd_xml)?;
+        repo.load_metadata_bytes::<RepomdXml>(repomd_xml)?;
 
         let repodata_path = repository_path.join("repodata");
         create_dir(&repository_path)?;
@@ -84,7 +82,7 @@ impl RepoDownloader {
 
         let begin = Instant::now();
         pool.scope(|_| {
-            repomd.metadata_files().par_iter().for_each(|md| {
+            repo.metadata_files.par_iter().for_each(|md| {
                 let relative_path = md.location_href.as_str();
                 let url = base_url.join(relative_path).unwrap();
 
@@ -92,7 +90,6 @@ impl RepoDownloader {
                 let metadata_bytes = download_file(&url).unwrap();
                 save_metadata_file(&metadata_bytes, fs_location).unwrap();
                 // verify_checksum(&fs_location, &md.checksum).unwrap();
-                // self.progress_cb();
             });
         });
         let end = Instant::now();
@@ -102,21 +99,19 @@ impl RepoDownloader {
             (end - begin).as_secs_f32()
         );
 
-        let primary_href = repomd.get_primary_data().location_href.as_str();
+        let primary_href = repo.get_primary_data().location_href.as_str();
         let primary_path = repository_path.join(primary_href);
         let primary_bytes = fs::read(&primary_path)?;
         let mut decoder = GzDecoder::new(primary_bytes.as_slice());
         let mut primary_xml = Vec::new();
         decoder.read_to_end(&mut primary_xml).unwrap();
-        let primary = Primary::from_bytes(&primary_xml)?;
-
-        let packages = primary.get_packages();
+        repo.load_metadata_bytes::<PrimaryXml>(&primary_xml)?;
 
         // let progress_bar = ProgressBar::new(packages.len() as u64);
 
         let begin = Instant::now();
         pool.scope(|_| {
-            packages.par_iter().for_each(|package| {
+            repo.packages.par_iter().for_each(|(_, package)| {
                 let relative_path = package.location_href.as_str();
                 let url = base_url.join(relative_path).unwrap();
 
@@ -124,8 +119,6 @@ impl RepoDownloader {
                 let package_bytes = download_file(&url).unwrap();
                 save_metadata_file(&package_bytes, fs_location).unwrap();
                 // verify_checksum(&fs_location, &package.checksum).unwrap();
-                // self.progress_cb();
-                // progress_bar.inc(1);
             });
         });
         let end = Instant::now();

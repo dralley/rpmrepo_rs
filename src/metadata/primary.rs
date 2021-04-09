@@ -286,14 +286,25 @@ fn write_requirement_section<W: Write, N: AsRef<[u8]> + Sized>(
     writer.write_event(Event::Start(section_tag.to_borrowed()))?;
 
     for entry in entry_list {
-        writer
-            .create_element("rpm:entry")
-            .with_attribute(("name", entry.name.as_str()))
-            .with_attribute(("flags", entry.flags.as_str()))
-            .with_attribute(("epoch", entry.epoch.as_str()))
-            .with_attribute(("ver", entry.version.as_str()))
-            .with_attribute(("rel", entry.release.as_str()))
-            .write_empty()?;
+        let mut entry_tag = BytesStart::borrowed_name(b"rpm:entry");
+        entry_tag.push_attribute(("name", entry.name.as_str()));
+
+        if let Some(flags) = &entry.flags {
+            entry_tag.push_attribute(("flags", flags.as_str()));
+        }
+
+        if let Some(epoch) = &entry.epoch {
+            entry_tag.push_attribute(("epoch", epoch.as_str()));
+        }
+
+        if let Some(version) = &entry.version {
+            entry_tag.push_attribute(("ver", version.as_str()));
+        }
+
+        if let Some(release) = &entry.release {
+            entry_tag.push_attribute(("rel", release.as_str()));
+        }
+        writer.write_event(Event::Empty(entry_tag))?;
     }
 
     writer.write_event(Event::End(section_tag.to_end()))?;
@@ -513,28 +524,26 @@ pub fn parse_requirement_list<R: BufRead>(
 
                 let flags = e
                     .try_get_attribute("flags")?
-                    .ok_or_else(|| MetadataError::MissingAttributeError("flags"))?
-                    .unescape_and_decode_value(reader)?;
+                    .and_then(|attr| attr.unescape_and_decode_value(reader).ok());
 
                 let epoch = e
                     .try_get_attribute("epoch")?
-                    .ok_or_else(|| MetadataError::MissingAttributeError("epoch"))?
-                    .unescape_and_decode_value(reader)?;
+                    .and_then(|attr| attr.unescape_and_decode_value(reader).ok());
 
                 let version = e
                     .try_get_attribute("ver")?
-                    .ok_or_else(|| MetadataError::MissingAttributeError("ver"))?
-                    .unescape_and_decode_value(reader)?;
+                    .and_then(|attr| attr.unescape_and_decode_value(reader).ok());
 
                 let release = e
                     .try_get_attribute("rel")?
-                    .ok_or_else(|| MetadataError::MissingAttributeError("rel"))?
-                    .unescape_and_decode_value(reader)?;
+                    .and_then(|attr| attr.unescape_and_decode_value(reader).ok());
 
-                let preinstall = e.try_get_attribute("rel")?.map_or(false, |a| {
-                    let val = a.unescape_and_decode_value(reader).unwrap(); // TODO
-                    val == "0" || val.eq_ignore_ascii_case("false")
-                });
+                let preinstall = e
+                    .try_get_attribute("rel")?
+                    .map_or(None, |a| {
+                        let val = a.unescape_and_decode_value(reader).unwrap(); // TODO
+                        Some(val == "0" || val.eq_ignore_ascii_case("false"))
+                    });
 
                 list.push(Requirement {
                     name,
