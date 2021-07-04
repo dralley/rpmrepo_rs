@@ -46,11 +46,19 @@ impl RpmMetadata for RepomdXml {
 
     fn write_metadata<W: Write>(
         repository: &Repository,
-        writer: &mut Writer<W>,
-    ) -> Result<(), MetadataError> {
-        write_repomd_xml(repository, writer)
+        writer: Writer<W>,
+    ) -> Result<W, MetadataError> {
+        let mut writer = writer;
+        write_repomd_xml(repository, &mut writer)?;
+
+        Ok(writer.into_inner())
     }
 }
+
+// struct RepomdXmlWriter<'a, W: Write> {
+//     repository: &'a mut Repository,
+//     writer: Writer<W>
+// }
 
 fn read_repomd_xml<R: BufRead>(
     repository: &mut Repository,
