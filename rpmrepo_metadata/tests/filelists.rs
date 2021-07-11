@@ -37,7 +37,9 @@ fn test_filelists_xml_writer_empty() -> Result<(), MetadataError> {
     let xml_writer = quick_xml::Writer::new_with_indent(Cursor::new(&mut buf), b' ', 2);
     let mut writer = FilelistsXml::new_writer(xml_writer);
     writer.write_header(0)?;
-    let buffer = writer.finish()?.into_inner();
+    writer.finish()?;
+
+    let buffer= writer.into_inner().into_inner();
 
     let actual = std::str::from_utf8(buffer)?;
     let expected = EMPTY_FILELISTS;
@@ -55,7 +57,9 @@ fn test_filelists_xml_writer_complex_pkg() -> Result<(), MetadataError> {
 
     writer.write_header(1)?;
     writer.write_package(&common::COMPLEX_PACKAGE)?;
-    let buffer = writer.finish()?.into_inner();
+    writer.finish()?;
+
+    let buffer = writer.into_inner().into_inner();
 
     let actual = std::str::from_utf8(buffer)?;
     let expected = COMPLEX_FILELISTS;
@@ -109,7 +113,9 @@ fn test_filelists_xml_writer_file() -> Result<(), MetadataError> {
     writer.write_header(0).unwrap();
     // TODO: actually test something here
     // writer.write_package(&common::RPM_EMPTY).unwrap();
-    let mut f = writer.finish()?;
+    writer.finish()?;
+
+    let mut f = writer.into_inner();
 
     f.seek(SeekFrom::Start(0))?;
     let mut actual = String::new();

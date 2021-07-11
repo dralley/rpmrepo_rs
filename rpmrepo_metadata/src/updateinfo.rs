@@ -41,7 +41,7 @@ impl RpmMetadata for UpdateinfoXml {
     fn write_metadata<W: Write>(
         repository: &Repository,
         writer: Writer<W>,
-    ) -> Result<W, MetadataError> {
+    ) -> Result<(), MetadataError> {
         let mut writer = UpdateinfoXml::new_writer(writer);
         writer.write_header()?;
 
@@ -82,7 +82,7 @@ impl<W: Write> UpdateinfoXmlWriter<W> {
         write_updaterecord(record, &mut self.writer)
     }
 
-    fn finish(mut self) -> Result<W, MetadataError> {
+    fn finish(&mut self) -> Result<(), MetadataError> {
         // </updates>
         self.writer
             .write_event(Event::End(BytesEnd::borrowed(TAG_UPDATES)))?;
@@ -91,7 +91,11 @@ impl<W: Write> UpdateinfoXmlWriter<W> {
         self.writer
             .write_event(Event::Text(BytesText::from_plain_str("\n")))?;
 
-        Ok(self.writer.into_inner())
+        Ok(())
+    }
+
+    pub fn into_inner(self) -> Writer<W> {
+        self.writer
     }
 }
 

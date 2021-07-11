@@ -35,7 +35,9 @@ fn test_other_xml_writer_empty() -> Result<(), MetadataError> {
     let mut writer = OtherXml::new_writer(xml_writer);
 
     writer.write_header(0)?;
-    let buffer = writer.finish()?.into_inner();
+    writer.finish()?;
+
+    let buffer = writer.into_inner().into_inner();
 
     let actual = std::str::from_utf8(buffer)?;
     let expected = EMPTY_OTHERDATA;
@@ -54,7 +56,9 @@ fn test_other_xml_writer_complex_pkg() -> Result<(), MetadataError> {
 
     writer.write_header(1)?;
     writer.write_package(&common::COMPLEX_PACKAGE)?;
-    let buffer = writer.finish()?.into_inner();
+    writer.finish()?;
+
+    let buffer = writer.into_inner().into_inner();
 
     let actual = std::str::from_utf8(buffer)?;
     let expected = COMPLEX_OTHERDATA;
@@ -107,7 +111,9 @@ fn test_other_xml_writer_file() -> Result<(), MetadataError> {
 
     writer.write_header(0).unwrap();
     // writer.write_package(&common::RPM_EMPTY).unwrap();
-    let mut f = writer.finish()?;
+    writer.finish()?;
+
+    let mut f = writer.into_inner();
 
     f.seek(SeekFrom::Start(0))?;
     let mut actual = String::new();

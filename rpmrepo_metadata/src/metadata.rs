@@ -68,7 +68,7 @@ pub trait RpmMetadata {
     fn write_metadata<W: Write>(
         repository: &Repository,
         buffer: Writer<W>,
-    ) -> Result<W, MetadataError>;
+    ) -> Result<(), MetadataError>;
 }
 
 // TODO: Trait impl tests https://github.com/rust-lang/rfcs/issues/616

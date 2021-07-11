@@ -232,7 +232,7 @@ impl Repository {
     ) -> Result<(), MetadataError> {
         let new_path = PathBuf::from(path);
         let new_path = new_path.join(M::filename());
-        let mut writer = create_xml_writer(&new_path, compression)?;
+        let writer = create_xml_writer(&new_path, compression)?;
         M::write_metadata(self, writer)?;
         Ok(())
     }
@@ -245,8 +245,8 @@ impl Repository {
     pub(crate) fn to_bytes<M: RpmMetadata>(&self) -> Result<Vec<u8>, MetadataError> {
         let mut buf = Vec::new();
         let writer = Writer::new_with_indent(Cursor::new(&mut buf), b' ', 2);
-        let buffer = M::write_metadata(self, writer)?;
-        Ok(buffer.into_inner().to_vec())
+        M::write_metadata(self, writer)?;
+        Ok(buf)
     }
 
     // TODO: allocation? one arena allocator per package, everything freed at once

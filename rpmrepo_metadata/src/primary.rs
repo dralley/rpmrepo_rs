@@ -57,7 +57,7 @@ impl RpmMetadata for PrimaryXml {
     fn write_metadata<W: Write>(
         repository: &Repository,
         writer: Writer<W>,
-    ) -> Result<W, MetadataError> {
+    ) -> Result<(), MetadataError> {
         let mut writer = PrimaryXml::new_writer(writer);
         writer.write_header(repository.packages().len())?;
         for package in repository.packages().values() {
@@ -112,7 +112,7 @@ impl<W: Write> PrimaryXmlWriter<W> {
         Ok(())
     }
 
-    pub fn finish(mut self) -> Result<W, MetadataError> {
+    pub fn finish(&mut self) -> Result<(), MetadataError> {
         assert_eq!(
             self.packages_written, self.num_packages,
             "Number of packages written {} does not match number of packages declared {}.",
@@ -127,7 +127,11 @@ impl<W: Write> PrimaryXmlWriter<W> {
         self.writer
             .write_event(Event::Text(BytesText::from_plain_str("\n")))?;
 
-        Ok(self.writer.into_inner())
+        Ok(())
+    }
+
+    pub fn into_inner(self) -> W {
+        self.writer.into_inner()
     }
 }
 
