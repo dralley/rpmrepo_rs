@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use dialoguer::Confirm;
-use indicatif::{HumanBytes, ParallelProgressIterator, ProgressBar, ProgressFinish, ProgressStyle};
+// use dialoguer::Confirm;
+// use indicatif::{HumanBytes, ParallelProgressIterator, ProgressBar, ProgressFinish, ProgressStyle};
 use io::BufReader;
 use rayon::prelude::*;
 use ring::digest;

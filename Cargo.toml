@@ -1,2 +1,2 @@
 [workspace]
-members = ["rpmrepo", "rpmrepo_metadata"]
+members = ["rpmrepo", "rpmrepo_metadata", "rpmrepo_download"]
