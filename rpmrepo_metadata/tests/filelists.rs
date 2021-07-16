@@ -4,8 +4,8 @@ use std::fs::OpenOptions;
 use std::io::{Cursor, Read, Seek, SeekFrom};
 
 use pretty_assertions::assert_eq;
-use tempdir::TempDir;
 use quick_xml;
+use tempdir::TempDir;
 
 use rpmrepo_metadata::*;
 
@@ -39,7 +39,7 @@ fn test_filelists_xml_writer_empty() -> Result<(), MetadataError> {
     writer.write_header(0)?;
     writer.finish()?;
 
-    let buffer= writer.into_inner().into_inner();
+    let buffer = writer.into_inner().into_inner();
 
     let actual = std::str::from_utf8(buffer)?;
     let expected = EMPTY_FILELISTS;

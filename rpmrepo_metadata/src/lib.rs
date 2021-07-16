@@ -12,4 +12,4 @@ pub use metadata::{
     Checksum, ChecksumType, FileType, FilelistsXml, MetadataError, OtherXml, Package, PackageFile,
     PrimaryXml, RepomdXml, Requirement, UpdateinfoXml,
 };
-pub use repository::{Repository, RepositoryOptions};
+pub use repository::{Repository, RepositoryOptions, RepositoryWriter};

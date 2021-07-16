@@ -4,8 +4,8 @@ use std::fs::OpenOptions;
 use std::io::{Cursor, Read, Seek, SeekFrom};
 
 use pretty_assertions::assert_eq;
-use tempdir::TempDir;
 use quick_xml;
+use tempdir::TempDir;
 
 use rpmrepo_metadata::*;
 

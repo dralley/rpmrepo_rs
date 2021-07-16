@@ -275,9 +275,8 @@ fn create_xml_writer(
 
     let mut filename = path.as_os_str().to_owned();
     filename.push(&extension);
-    let path = path.join(&filename);
 
-    let file = File::create(path)?;
+    let file = File::create(filename)?;
 
     let inner_writer = match compression {
         CompressionType::None => Box::new(file),
@@ -286,14 +285,14 @@ fn create_xml_writer(
             niffler::compression::Format::Gzip,
             niffler::Level::Nine,
         )?,
-        CompressionType::Xz => niffler::get_writer(
-            Box::new(file),
-            niffler::compression::Format::Lzma,
-            niffler::Level::Nine,
-        )?,
         CompressionType::Bz2 => niffler::get_writer(
             Box::new(file),
             niffler::compression::Format::Bzip,
+            niffler::Level::Nine,
+        )?,
+        CompressionType::Xz => niffler::get_writer(
+            Box::new(file),
+            niffler::compression::Format::Lzma,
             niffler::Level::Nine,
         )?,
         _ => unimplemented!(),
@@ -396,57 +395,66 @@ impl RepositoryOptions {
 //     })
 // }
 
-pub struct RepositoryWriter<W: Write> {
+pub struct RepositoryWriter {
     options: RepositoryOptions,
 
-    primary_xml_writer: PrimaryXmlWriter<W>,
-    filelists_xml_writer: FilelistsXmlWriter<W>,
-    other_xml_writer: OtherXmlWriter<W>,
+    primary_xml_writer: PrimaryXmlWriter<Box<dyn Write>>,
+    filelists_xml_writer: FilelistsXmlWriter<Box<dyn Write>>,
+    other_xml_writer: OtherXmlWriter<Box<dyn Write>>,
 }
 
 // // Writer<BufWriter<Box<dyn Write>>>
 
-// impl<W: Write> RepositoryWriter<W> {
-//     pub fn new(options: RepositoryOptions) -> Result<Self, MetadataError> {
+impl RepositoryWriter {
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, MetadataError> {
+        let options = RepositoryOptions::default();
 
-//         let mut primary_writer =  create_xml_writer(&Path::new("primary.xml"), CompressionType::None)?;
-//         let mut filelists_writer =  create_xml_writer(&Path::new("filelists.xml"), CompressionType::None)?;
-//         let mut other_writer = create_xml_writer(&Path::new("other.xml"), CompressionType::None)?;
+        let repodata_dir = path.as_ref().join("repodata");
+        std::fs::create_dir_all(&repodata_dir)?;
 
-//         Ok(Self {
-//             options,
+        let primary_path = repodata_dir.join("primary.xml");
+        let filelists_path = repodata_dir.join("filelists.xml");
+        let other_path = repodata_dir.join("other.xml");
 
-//             primary_xml_writer: PrimaryXml::new_writer(primary_writer),
-//             filelists_xml_writer: FilelistsXml::new_writer(filelists_writer),
-//             other_xml_writer: OtherXml::new_writer(other_writer),
-//         })
-//     }
+        let primary_writer = create_xml_writer(&primary_path, options.metadata_compression_type)?;
+        let filelists_writer =
+            create_xml_writer(&filelists_path, options.metadata_compression_type)?;
+        let other_writer = create_xml_writer(&other_path, options.metadata_compression_type)?;
 
-//     pub fn start(&mut self, num_pkgs: usize) -> Result<(), MetadataError> {
-//         self.primary_xml_writer.write_header(num_pkgs)?;
-//         self.filelists_xml_writer.write_header(num_pkgs)?;
-//         self.other_xml_writer.write_header(num_pkgs)?;
-//         Ok(())
-//     }
+        Ok(Self {
+            options: options,
 
-//     pub fn add_package(&mut self, pkg: &Package) -> Result<(), MetadataError> {
-//         self.primary_xml_writer.write_package(pkg)?;
-//         self.filelists_xml_writer.write_package(pkg)?;
-//         self.other_xml_writer.write_package(pkg)?;
-//         Ok(())
-//     }
+            primary_xml_writer: PrimaryXml::new_writer(primary_writer),
+            filelists_xml_writer: FilelistsXml::new_writer(filelists_writer),
+            other_xml_writer: OtherXml::new_writer(other_writer),
+        })
+    }
 
-//     pub fn finish(&mut self) -> Result<(), MetadataError> {
-//         self.primary_xml_writer.finish()?;
-//         self.filelists_xml_writer.finish()?;
-//         self.other_xml_writer.finish()?;
+    pub fn start(&mut self, num_pkgs: usize) -> Result<(), MetadataError> {
+        self.primary_xml_writer.write_header(num_pkgs)?;
+        self.filelists_xml_writer.write_header(num_pkgs)?;
+        self.other_xml_writer.write_header(num_pkgs)?;
+        Ok(())
+    }
 
-//         // let mut repomd_writer = RepomdXml::from_writer(repomd_writer);
-//         // match self.options.metadata_checksum_type {}
+    pub fn add_package(&mut self, pkg: &Package) -> Result<(), MetadataError> {
+        self.primary_xml_writer.write_package(pkg)?;
+        self.filelists_xml_writer.write_package(pkg)?;
+        self.other_xml_writer.write_package(pkg)?;
+        Ok(())
+    }
 
-//         Ok(())
-//     }
-// }
+    pub fn finish(&mut self) -> Result<(), MetadataError> {
+        self.primary_xml_writer.finish()?;
+        self.filelists_xml_writer.finish()?;
+        self.other_xml_writer.finish()?;
+
+        // let mut repomd_writer = RepomdXml::from_writer(repomd_writer);
+        // match self.options.metadata_checksum_type {}
+
+        Ok(())
+    }
+}
 
 // pub struct StreamingReader {
 //     primary_reader: Reader<BufReader<Box<dyn Read>>>,
